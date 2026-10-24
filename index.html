@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flag Football Play Designer</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #eef0f3;
+    color: #1f2328;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: #1f2328;
+    color: #fff;
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  header input {
+    flex: 1;
+    max-width: 320px;
+    font: inherit;
+    padding: 6px 10px;
+    border-radius: 6px;
+    border: 1px solid #555;
+    background: #2d333b;
+    color: #fff;
+  }
+  main {
+    display: flex;
+    gap: 16px;
+    padding: 16px;
+    align-items: flex-start;
+  }
+  aside {
+    width: 280px;
+    flex-shrink: 0;
+    background: #fff;
+    border-radius: 10px;
+    padding: 14px;
+    box-shadow: 0 1px 3px rgba(0,0,0,.08);
+  }
+  aside h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: #656d76; margin: 16px 0 8px; }
+  aside h2:first-child { margin-top: 0; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  input[type=number] { width: 70px; font: inherit; padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; }
+  .modes { display: flex; border: 1px solid #ccc; border-radius: 8px; overflow: hidden; }
+  .modes button { flex: 1; border: 0; border-radius: 0; background: #fff; }
+  .modes button.on { background: #1d4ed8; color: #fff; }
+  button {
+    font: inherit;
+    font-size: 14px;
+    padding: 7px 10px;
+    border: 1px solid #ccc;
+    border-radius: 6px;
+    background: #f6f8fa;
+    cursor: pointer;
+  }
+  button:hover { filter: brightness(.96); }
+  #players { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+  #players li { display: flex; gap: 6px; align-items: center; }
+  #players input[type=text] { flex: 1; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid #ccc; border-radius: 6px; }
+  #players input[type=color] { width: 32px; height: 32px; padding: 0; border: 1px solid #ccc; border-radius: 6px; background: none; cursor: pointer; }
+  #players button { padding: 5px 8px; }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .hint { font-size: 13px; color: #656d76; line-height: 1.45; margin: 14px 0 0; }
+  .wrap { flex: 1; min-width: 0; }
+  #field {
+    display: block;
+    width: 100%;
+    max-height: calc(100vh - 100px);
+    border-radius: 10px;
+    touch-action: none;
+    user-select: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,.15);
+  }
+  #field.draw .player { cursor: crosshair; }
+  #field.move .player { cursor: grab; }
+  @media (max-width: 760px) {
+    main { flex-direction: column-reverse; }
+    aside { width: 100%; }
+    #field { max-height: none; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>🏈 Play Designer</h1>
+  <input id="playName" aria-label="Play name" placeholder="Play name">
+</header>
+<main>
+  <aside>
+    <h2>Players</h2>
+    <div class="row">
+      <label for="count">Number of players</label>
+      <input type="number" id="count" min="1" max="11">
+    </div>
+    <h2>Mode</h2>
+    <div class="modes">
+      <button data-mode="draw">✏️ Draw routes</button>
+      <button data-mode="move">✋ Move players</button>
+    </div>
+    <h2>Names &amp; colors</h2>
+    <ul id="players"></ul>
+    <h2>Actions</h2>
+    <div class="actions">
+      <button id="undo">Undo</button>
+      <button id="clearRoutes">Clear routes</button>
+      <button id="reset">Reset formation</button>
+      <button id="png">Download PNG</button>
+    </div>
+    <p class="hint">
+      <b>Draw:</b> press on a player and drag to draw their route — it gets cleaned into crisp cuts when you let go. Drawing again replaces it.<br>
+      <b>Move:</b> drag players to set the formation (their routes come with them).<br>
+      Shortcuts: <b>D</b> draw, <b>M</b> move, <b>Ctrl+Z</b> undo. Your play is saved in this browser.
+    </p>
+  </aside>
+  <div class="wrap">
+    <svg id="field" viewBox="0 0 600 500" xmlns="http://www.w3.org/2000/svg">
+      <g id="fieldLayer"></g>
+      <g id="routesLayer"></g>
+      <g id="playersLayer"></g>
+    </svg>
+  </div>
+</main>
+
+<script>
+const NS = 'http://www.w3.org/2000/svg';
+const W = 600, H = 500, LOS = 380, YARD = 20;
+const FONT = 'system-ui, -apple-system, Segoe UI, sans-serif';
+const STORE_KEY = 'flag-football-play';
+
+// Default spot + name for each player slot, in order.
+const SLOTS = [
+  [300, 440, 'QB'], [300, 380, 'C'], [90, 380, 'X'], [510, 380, 'Z'],
+  [200, 395, 'Y'], [390, 440, 'RB'], [410, 395, 'TE'], [40, 380, 'W'],
+  [560, 380, 'H'], [210, 440, 'F'], [300, 485, 'S'],
+];
+const COLORS = ['#ffffff', '#1d4ed8', '#e63946', '#f59e0b', '#7c3aed', '#ec4899',
+                '#0ea5e9', '#f97316', '#111827', '#facc15', '#14b8a6'];
+
+const svg = document.getElementById('field');
+const fieldLayer = document.getElementById('fieldLayer');
+const routesLayer = document.getElementById('routesLayer');
+const playersLayer = document.getElementById('playersLayer');
+const countInput = document.getElementById('count');
+const nameInput = document.getElementById('playName');
+const list = document.getElementById('players');
+
+let state = load() || { name: 'Play 1', players: defaultPlayers(5) };
+let mode = 'draw';
+let drag = null;
+const undoStack = [];
+
+function defaultPlayer(i) {
+  const [x, y, name] = SLOTS[i];
+  return { name, color: COLORS[i], x, y, route: [] };
+}
+function defaultPlayers(n) {
+  return Array.from({ length: n }, (_, i) => defaultPlayer(i));
+}
+
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch {}
+}
+function load() {
+  try {
+    const s = JSON.parse(localStorage.getItem(STORE_KEY));
+    return s && Array.isArray(s.players) && s.players.length ? s : null;
+  } catch { return null; }
+}
+
+function snapshot() {
+  undoStack.push(JSON.stringify(state.players));
+  if (undoStack.length > 50) undoStack.shift();
+}
+function undo() {
+  if (!undoStack.length) return;
+  state.players = JSON.parse(undoStack.pop());
+  renderList();
+  render();
+}
+
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+
+function textColorFor(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = n >> 16, g = (n >> 8) & 255, b = n & 255;
+  return (0.299 * r + 0.587 * g + 0.114 * b) > 160 ? '#111827' : '#ffffff';
+}
+
+// ---- Field ----
+function drawField() {
+  el('rect', { x: 0, y: 0, width: W, height: H, fill: '#3d8b3d' }, fieldLayer);
+  // Alternating mow stripes every 5 yards
+  for (let y = LOS; y > -100; y -= 200) {
+    el('rect', { x: 0, y: y - 100, width: W, height: 100, fill: '#43944a' }, fieldLayer);
+  }
+  // Yard ticks along sidelines and middle
+  for (let y = LOS % YARD; y < H; y += YARD) {
+    for (const x of [8, 200, 400, W - 8]) {
+      el('line', { x1: x - 6, x2: x + 6, y1: y, y2: y, stroke: '#fff', 'stroke-opacity': .45, 'stroke-width': 1.5 }, fieldLayer);
+    }
+  }
+  // 5-yard lines + labels
+  for (let k = -1; k <= 3; k++) {
+    const y = LOS - k * 5 * YARD;
+    if (k === 0 || y < 0 || y > H) continue;
+    el('line', { x1: 0, x2: W, y1: y, y2: y, stroke: '#fff', 'stroke-opacity': .6, 'stroke-width': 2 }, fieldLayer);
+    if (k > 0) {
+      for (const x of [34, W - 34]) {
+        const t = el('text', { x, y: y - 6, fill: '#fff', 'fill-opacity': .7, 'font-size': 14,
+          'font-weight': 700, 'font-family': FONT, 'text-anchor': 'middle' }, fieldLayer);
+        t.textContent = k * 5;
+      }
+    }
+  }
+  // Line of scrimmage
+  el('line', { x1: 0, x2: W, y1: LOS, y2: LOS, stroke: '#60a5fa', 'stroke-width': 3, 'stroke-dasharray': '10 6' }, fieldLayer);
+}
+
+// ---- Rendering ----
+function render() {
+  routesLayer.replaceChildren();
+  playersLayer.replaceChildren();
+  state.players.forEach((p, i) => {
+    if (p.route.length > 1) drawRoute(p);
+    drawPlayer(p, i);
+  });
+  save();
+}
+
+function drawRoute(p) {
+  const pts = p.route.map(q => q.slice());
+  const end = pts[pts.length - 1];
+  // Find a point far enough back to get a stable arrow direction
+  let prev = pts[pts.length - 2];
+  for (let j = pts.length - 2; j >= 0; j--) {
+    prev = pts[j];
+    if (Math.hypot(end[0] - prev[0], end[1] - prev[1]) > 10) break;
+  }
+  let dx = end[0] - prev[0], dy = end[1] - prev[1];
+  const len = Math.hypot(dx, dy) || 1;
+  dx /= len; dy /= len;
+  // Pull the line back so it doesn't poke past the arrow tip
+  pts[pts.length - 1] = [end[0] - dx * 8, end[1] - dy * 8];
+
+  const outline = { fill: 'none', 'stroke-linejoin': 'round', 'stroke-linecap': 'round' };
+  const d = 'M' + pts.map(q => q[0].toFixed(1) + ' ' + q[1].toFixed(1)).join(' L');
+  el('path', { d, ...outline, stroke: '#000', 'stroke-opacity': .35, 'stroke-width': 7 }, routesLayer);
+  el('path', { d, ...outline, stroke: p.color, 'stroke-width': 4 }, routesLayer);
+
+  const bx = end[0] - dx * 16, by = end[1] - dy * 16;
+  const nx = -dy * 8, ny = dx * 8;
+  el('polygon', {
+    points: `${end[0]},${end[1]} ${bx + nx},${by + ny} ${bx - nx},${by - ny}`,
+    fill: p.color, stroke: '#000', 'stroke-opacity': .35, 'stroke-width': 1.5, 'stroke-linejoin': 'round',
+  }, routesLayer);
+}
+
+function drawPlayer(p, i) {
+  const label = p.name.trim() || '?';
+  const w = Math.max(38, label.length * 9 + 18);
+  const g = el('g', { class: 'player', 'data-i': i, transform: `translate(${p.x} ${p.y})` }, playersLayer);
+  el('rect', { x: -w / 2, y: -19, width: w, height: 38, rx: 19, fill: p.color, stroke: '#fff', 'stroke-width': 2.5 }, g);
+  el('rect', { x: -w / 2 - 1.5, y: -20.5, width: w + 3, height: 41, rx: 20.5, fill: 'none', stroke: '#000', 'stroke-opacity': .3, 'stroke-width': 1 }, g);
+  const t = el('text', { 'text-anchor': 'middle', 'dominant-baseline': 'central', 'font-size': 15,
+    'font-weight': 700, 'font-family': FONT, fill: textColorFor(p.color) }, g);
+  t.textContent = label;
+}
+
+function renderList() {
+  countInput.value = state.players.length;
+  nameInput.value = state.name;
+  list.replaceChildren();
+  state.players.forEach((p, i) => {
+    const li = document.createElement('li');
+    const color = Object.assign(document.createElement('input'), { type: 'color', value: p.color, title: 'Color' });
+    color.oninput = () => { p.color = color.value; render(); };
+    const name = Object.assign(document.createElement('input'), { type: 'text', value: p.name, maxLength: 14, placeholder: 'Name' });
+    name.oninput = () => { p.name = name.value; render(); };
+    const clear = Object.assign(document.createElement('button'), { textContent: '✕', title: 'Clear this route' });
+    clear.onclick = () => { snapshot(); p.route = []; render(); };
+    li.append(color, name, clear);
+    list.append(li);
+  });
+}
+
+// ---- Route cleanup (Ramer–Douglas–Peucker) ----
+function segDist(p, a, b) {
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = dx * dx + dy * dy;
+  let t = L ? ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / L : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p[0] - a[0] - t * dx, p[1] - a[1] - t * dy);
+}
+function simplify(pts, eps) {
+  if (pts.length < 3) return pts;
+  const a = pts[0], b = pts[pts.length - 1];
+  let dmax = 0, idx = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const d = segDist(pts[i], a, b);
+    if (d > dmax) { dmax = d; idx = i; }
+  }
+  if (dmax <= eps) return [a, b];
+  return simplify(pts.slice(0, idx + 1), eps).slice(0, -1).concat(simplify(pts.slice(idx), eps));
+}
+function pathLength(pts) {
+  let s = 0;
+  for (let i = 1; i < pts.length; i++) s += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
+  return s;
+}
+
+// ---- Pointer interaction ----
+function toSvg(e) {
+  const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  return [Math.max(0, Math.min(W, pt.x)), Math.max(0, Math.min(H, pt.y))];
+}
+
+svg.addEventListener('pointerdown', e => {
+  const g = e.target.closest('[data-i]');
+  if (!g) return;
+  e.preventDefault();
+  svg.setPointerCapture(e.pointerId);
+  const i = +g.dataset.i, p = state.players[i], [x, y] = toSvg(e);
+  snapshot();
+  if (mode === 'move') {
+    drag = { type: 'move', p, dx: x - p.x, dy: y - p.y };
+  } else {
+    drag = { type: 'draw', p, prev: p.route, pts: [[p.x, p.y]] };
+  }
+});
+
+svg.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const [x, y] = toSvg(e), p = drag.p;
+  if (drag.type === 'move') {
+    const nx = Math.max(20, Math.min(W - 20, x - drag.dx));
+    const ny = Math.max(20, Math.min(H - 20, y - drag.dy));
+    const ddx = nx - p.x, ddy = ny - p.y;
+    p.route = p.route.map(([rx, ry]) => [rx + ddx, ry + ddy]);
+    p.x = nx; p.y = ny;
+  } else {
+    const last = drag.pts[drag.pts.length - 1];
+    if (Math.hypot(x - last[0], y - last[1]) < 3) return;
+    drag.pts.push([x, y]);
+    p.route = drag.pts;
+  }
+  render();
+});
+
+function endDrag() {
+  if (!drag) return;
+  if (drag.type === 'draw') {
+    const p = drag.p;
+    if (pathLength(drag.pts) < 15) {
+      // Just a tap — keep the old route and drop the no-op undo entry
+      p.route = drag.prev;
+      undoStack.pop();
+    } else {
+      p.route = simplify(drag.pts, 6);
+    }
+  }
+  drag = null;
+  render();
+}
+svg.addEventListener('pointerup', endDrag);
+svg.addEventListener('pointercancel', endDrag);
+
+// ---- Controls ----
+function setMode(m) {
+  mode = m;
+  svg.setAttribute('class', m);
+  document.querySelectorAll('.modes button').forEach(b => b.classList.toggle('on', b.dataset.mode === m));
+}
+document.querySelectorAll('.modes button').forEach(b => b.onclick = () => setMode(b.dataset.mode));
+
+countInput.onchange = () => {
+  const n = Math.max(1, Math.min(SLOTS.length, parseInt(countInput.value, 10) || 1));
+  snapshot();
+  const ps = state.players;
+  while (ps.length < n) ps.push(defaultPlayer(ps.length));
+  ps.length = n;
+  renderList();
+  render();
+};
+
+nameInput.oninput = () => { state.name = nameInput.value; save(); };
+
+document.getElementById('undo').onclick = undo;
+document.getElementById('clearRoutes').onclick = () => {
+  snapshot();
+  state.players.forEach(p => p.route = []);
+  render();
+};
+document.getElementById('reset').onclick = () => {
+  snapshot();
+  state.players.forEach((p, i) => {
+    const [x, y] = SLOTS[i];
+    p.x = x; p.y = y; p.route = [];
+  });
+  render();
+};
+document.getElementById('png').onclick = exportPng;
+
+document.addEventListener('keydown', e => {
+  if (e.target.matches('input')) return;
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); undo(); }
+  else if (e.key === 'd') setMode('draw');
+  else if (e.key === 'm') setMode('move');
+});
+
+// ---- Export ----
+async function exportPng() {
+  const clone = svg.cloneNode(true);
+  clone.setAttribute('width', W);
+  clone.setAttribute('height', H);
+  const img = new Image();
+  img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(new XMLSerializer().serializeToString(clone));
+  await img.decode();
+
+  const scale = 2, band = 44;
+  const c = document.createElement('canvas');
+  c.width = W * scale;
+  c.height = (H + band) * scale;
+  const ctx = c.getContext('2d');
+  ctx.scale(scale, scale);
+  ctx.fillStyle = '#1f2328';
+  ctx.fillRect(0, 0, W, band);
+  ctx.fillStyle = '#fff';
+  ctx.font = `700 20px ${FONT}`;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(state.name || 'Untitled play', 16, band / 2);
+  ctx.drawImage(img, 0, band, W, H);
+
+  const a = document.createElement('a');
+  a.download = (state.name || 'play').replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-') + '.png';
+  a.href = c.toDataURL('image/png');
+  a.click();
+}
+
+drawField();
+setMode('draw');
+renderList();
+render();
+</script>
+</body>
+</html>
