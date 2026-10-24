@@ -58,6 +58,22 @@ def shared_crop(imgs):
             min(w, xs.max() + pad), min(h, ys.max() + pad))
 
 
+def to_bw(img):
+    """Recolor for black-and-white printers: white field, dark routes and players.
+
+    On a gray printout the green field comes out about as dark as the red and
+    purple routes, so they disappear. Clearing the field and darkening everything
+    else keeps every route visible without wasting toner.
+    """
+    a = np.asarray(img, dtype=np.int16)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    lum = 0.299 * r + 0.587 * g + 0.114 * b
+    out = lum * 0.45                                # routes, arrows, bubbles
+    out[g - np.maximum(r, b) > 20] = 255            # grass, yard lines, numbers
+    out[(b - r > 70) & (lum > 130)] = 175           # light-blue line of scrimmage
+    return Image.fromarray(out.clip(0, 255).astype(np.uint8), "L").convert("RGB")
+
+
 def png_bytes(img):
     buf = io.BytesIO()
     img.save(buf, "PNG")
@@ -82,16 +98,19 @@ def play_name(path):
     return os.path.splitext(os.path.basename(path))[0].replace("-", " ").replace("_", " ").upper()
 
 
-def build(paths, out, card_w_in, card_h_in):
+def build(paths, out, card_w_in, card_h_in, per_window=None, fill=False, bw=False):
     windows = len(WINDOWS)
     card_w, card_h = card_w_in * PT, card_h_in * PT
     imgs = load_fields(paths)
     box = shared_crop(imgs)
+    if bw:
+        imgs = [to_bw(i) for i in imgs]
     aspect = (box[2] - box[0]) / (box[3] - box[1])
-    cols, rows = pick_grid(len(imgs), windows, card_w, card_h, aspect)
-    if len(imgs) > cols * rows * windows:
-        raise SystemExit(f"Too many plays ({len(imgs)}) for {windows} windows")
-    per_card = math.ceil(len(imgs) / windows)  # spread plays evenly so every window gets used
+    # Spread plays evenly so every window gets used, unless told how many go on each card
+    per_card = per_window or math.ceil(len(imgs) / windows)
+    if len(imgs) > per_card * windows:
+        raise SystemExit(f"Too many plays ({len(imgs)}) for {windows} windows of {per_card}")
+    cols, rows = pick_grid(per_card, 1, card_w, card_h, aspect)
 
     doc = pymupdf.open()
     page = doc.new_page(width=8.5 * PT, height=11 * PT)
@@ -104,16 +123,22 @@ def build(paths, out, card_w_in, card_h_in):
     x0 = (8.5 * PT - card_w) / 2
     y = 1.15 * PT
     cell_w, cell_h = card_w / cols, card_h / rows
-    img_h = min(cell_w / aspect, cell_h - LABEL_H) - 2
-    img_w = img_h * aspect
+    if fill:
+        # Stretch each diagram to fill its cell; depth stays true, the field just gets wider
+        img_w, img_h = cell_w - 2, cell_h - LABEL_H - 2
+    else:
+        img_h = min(cell_w / aspect, cell_h - LABEL_H) - 2
+        img_w = img_h * aspect
     for w_i, window in enumerate(WINDOWS):
+        count = max(0, min(per_card, len(imgs) - w_i * per_card))
+        if not count:
+            break
         card = pymupdf.Rect(x0, y, x0 + card_w, y + card_h)
         page.draw_rect(card, color=(0.4, 0.4, 0.4), width=0.6, dashes="[4 3] 0")
         # Window label outside the cut line so it doesn't end up on the card
         page.insert_text((card.x1 + 6, card.y0 + 12), window, fontsize=10, fontname="hebo",
                          color=(0.4, 0.4, 0.4))
 
-        count = max(0, min(per_card, len(imgs) - w_i * per_card))
         rows_used = math.ceil(count / cols)
         for slot in range(count):
             idx = w_i * per_card + slot
@@ -123,7 +148,7 @@ def build(paths, out, card_w_in, card_h_in):
             left = card.x0 + (col + (cols - in_row) / 2) * cell_w + (cell_w - img_w) / 2
             top = card.y0 + (row + (rows - rows_used) / 2) * cell_h + (cell_h - img_h - LABEL_H) / 2
             rect = pymupdf.Rect(left, top + LABEL_H, left + img_w, top + LABEL_H + img_h)
-            page.insert_image(rect, stream=png_bytes(imgs[idx].crop(box)))
+            page.insert_image(rect, stream=png_bytes(imgs[idx].crop(box)), keep_proportion=not fill)
 
             # Number + name in a dark strip above the field, like the designer's export
             label = f"{idx + 1}  {play_name(paths[idx])}"
@@ -145,6 +170,9 @@ if __name__ == "__main__":
     ap.add_argument("images", nargs="+", help="play PNGs, in the order to number them")
     ap.add_argument("--card", default="4.5x2.75", help="card size in inches, WIDTHxHEIGHT (default 4.5x2.75)")
     ap.add_argument("--out", default="wristband-plays.pdf")
+    ap.add_argument("--per-window", type=int, help="plays per card (default: spread evenly over the 3 windows)")
+    ap.add_argument("--fill", action="store_true", help="stretch diagrams sideways to fill each card")
+    ap.add_argument("--bw", action="store_true", help="white field and dark routes, for black-and-white printers")
     args = ap.parse_args()
     w, h = (float(v) for v in args.card.lower().split("x"))
-    build(args.images, args.out, w, h)
+    build(args.images, args.out, w, h, args.per_window, args.fill, args.bw)
